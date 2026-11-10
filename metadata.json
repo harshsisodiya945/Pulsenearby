@@ -1,0 +1,7 @@
+{
+  "name": "PulseNearby - Social Map & Live Chat",
+  "description": "Discover people near you in real time on an interactive map, search by username or location, chat live, and connect locally.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
