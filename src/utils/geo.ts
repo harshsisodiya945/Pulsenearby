@@ -69,3 +69,120 @@ export function offsetCoordinates(
     longitude: Number((lng + dLng).toFixed(6)),
   };
 }
+
+export interface DetectedLocation {
+  latitude: number;
+  longitude: number;
+  city: string;
+  neighborhood: string;
+  country?: string;
+  source: 'gps' | 'ip';
+}
+
+/**
+ * Reverse geocode lat/lng to city and neighborhood using OpenStreetMap Nominatim (Free, no key needed)
+ */
+export async function reverseGeocode(
+  lat: number,
+  lng: number
+): Promise<{ city: string; neighborhood: string; country: string }> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=14&addressdetails=1`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!res.ok) throw new Error('Geocoding response not ok');
+    const data = await res.json();
+    const addr = data.address || {};
+    const city =
+      addr.city || addr.town || addr.village || addr.municipality || addr.state_district || 'My City';
+    const neighborhood =
+      addr.neighbourhood || addr.suburb || addr.quarter || addr.residential || addr.road || 'Local Area';
+    const country = addr.country || '';
+    return { city, neighborhood, country };
+  } catch {
+    return { city: 'Local Area', neighborhood: 'My Location', country: '' };
+  }
+}
+
+/**
+ * Forward geocode text search (e.g. "Mumbai", "Indore", "Connaught Place") to coordinates using Nominatim
+ */
+export async function geocodeSearch(
+  query: string
+): Promise<{ latitude: number; longitude: number; city: string; neighborhood: string } | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&addressdetails=1`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const item = data[0];
+    const lat = Number(parseFloat(item.lat).toFixed(6));
+    const lon = Number(parseFloat(item.lon).toFixed(6));
+    const addr = item.address || {};
+    const city = addr.city || addr.town || addr.village || addr.state_district || item.name || query;
+    const neighborhood = addr.neighbourhood || addr.suburb || addr.road || '';
+    return { latitude: lat, longitude: lon, city, neighborhood };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Detect user's true location via Browser Geolocation (high accuracy), falling back to IP-based location
+ */
+export async function detectRealLocation(): Promise<DetectedLocation> {
+  // 1. Try Browser GPS
+  if (typeof navigator !== 'undefined' && navigator.geolocation) {
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 6000,
+          maximumAge: 0,
+        });
+      });
+
+      const lat = Number(pos.coords.latitude.toFixed(6));
+      const lng = Number(pos.coords.longitude.toFixed(6));
+      const geo = await reverseGeocode(lat, lng);
+
+      return {
+        latitude: lat,
+        longitude: lng,
+        city: geo.city,
+        neighborhood: geo.neighborhood,
+        country: geo.country,
+        source: 'gps',
+      };
+    } catch {
+      // Browser GPS denied or timed out; fall through to IP fallback
+    }
+  }
+
+  // 2. Fallback to free IP geolocation (works even if browser GPS is blocked/denied)
+  try {
+    const res = await fetch('https://ipwho.is/');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && typeof data.latitude === 'number' && typeof data.longitude === 'number') {
+        return {
+          latitude: Number(data.latitude.toFixed(6)),
+          longitude: Number(data.longitude.toFixed(6)),
+          city: data.city || data.region || 'Local Area',
+          neighborhood: data.region || '',
+          country: data.country || '',
+          source: 'ip',
+        };
+      }
+    }
+  } catch {
+    // Both failed
+  }
+
+  throw new Error('Unable to determine location automatically');
+}
+

@@ -14,6 +14,7 @@ interface NavbarProps {
   onOpenChatWithUser: (user: User) => void;
   onlineCount: number;
   totalNearbyCount: number;
+  onOpenLocationPicker?: () => void;
 }
 
 export function Navbar({
@@ -27,6 +28,7 @@ export function Navbar({
   onOpenChatWithUser,
   onlineCount,
   totalNearbyCount,
+  onOpenLocationPicker,
 }: NavbarProps) {
   const totalUnread = conversations.reduce((acc, c) => acc + c.unreadCount, 0);
 
@@ -51,11 +53,20 @@ export function Navbar({
                 LIVE
               </span>
             </div>
-            <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+            <div className="text-[11px] text-slate-400 flex items-center gap-1.5 flex-wrap">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
               <span>
-                <strong className="text-emerald-400 font-semibold">{onlineCount}</strong> online near {currentUser.neighborhood || currentUser.city}
+                <strong className="text-emerald-400 font-semibold">{onlineCount}</strong> online near
               </span>
+              <button
+                type="button"
+                onClick={onOpenLocationPicker}
+                className="inline-flex items-center gap-1 font-semibold text-indigo-300 hover:text-white underline decoration-indigo-500/60 hover:decoration-indigo-400 transition-colors cursor-pointer"
+                title="Click to set your exact city or location"
+              >
+                <span>{currentUser.neighborhood || currentUser.city}</span>
+                <span className="text-[9px] text-indigo-400/80 font-normal">(change)</span>
+              </button>
             </div>
           </div>
         </div>

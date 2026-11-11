@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { User } from '../../types/index.ts';
-import { Locate, Layers, Navigation, MessageCircle, Hand, UserCheck, Shield } from 'lucide-react';
+import { Locate, Layers, Navigation, MessageCircle, Hand, UserCheck, Shield, MapPin } from 'lucide-react';
 
 interface SocialMapProps {
   currentUser: User;
@@ -11,6 +11,9 @@ interface SocialMapProps {
   onStartChat: (user: User) => void;
   onWaveUser: (user: User) => void;
   onChangeUserLocation: (lat: number, lng: number) => void;
+  onDetectRealLocation?: () => void;
+  isDetectingLocation?: boolean;
+  onOpenLocationPicker?: () => void;
 }
 
 type MapTheme = 'dark' | 'light' | 'streets';
@@ -23,6 +26,9 @@ export function SocialMap({
   onStartChat,
   onWaveUser,
   onChangeUserLocation,
+  onDetectRealLocation,
+  isDetectingLocation,
+  onOpenLocationPicker,
 }: SocialMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -58,10 +64,11 @@ export function SocialMap({
     };
   }, []);
 
-  // Update Tile Layer based on theme
+  // Update Tile Layer based on theme (Ultra-fast CDN tiles, 100% free, NO API KEY)
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map) return;
+    const container = mapContainerRef.current;
+    if (!map || !container) return;
 
     // Remove existing tile layers
     map.eachLayer((layer) => {
@@ -70,20 +77,35 @@ export function SocialMap({
       }
     });
 
-    let tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-    let attribution = '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org">OSM</a>';
+    // Remove dark-tiles CSS filter class before reapplying
+    container.classList.remove('dark-tiles');
 
-    if (mapTheme === 'light') {
-      tileUrl = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-    } else if (mapTheme === 'streets') {
+    let tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+    let attribution = '&copy; <a href="https://www.esri.com/">Esri</a> contributors';
+    let maxZoom = 19;
+
+    if (mapTheme === 'dark') {
+      // Hardware-accelerated night theme
+      container.classList.add('dark-tiles');
       tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-      attribution = '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>';
+      attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+    } else if (mapTheme === 'streets') {
+      // High-speed Akamai edge CDN street map (ultra-fast in India and globally)
+      tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+      attribution = '&copy; <a href="https://www.esri.com/">Esri</a>';
+    } else if (mapTheme === 'light') {
+      // Clean standard OpenStreetMap
+      tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
     }
 
     L.tileLayer(tileUrl, {
       attribution,
-      maxZoom: 19,
-      subdomains: 'abcd',
+      maxZoom,
+      subdomains: ['a', 'b', 'c'],
+      keepBuffer: 8,
+      updateWhenIdle: false,
+      updateWhenZooming: false,
     }).addTo(map);
   }, [mapTheme]);
 
@@ -104,6 +126,15 @@ export function SocialMap({
       map.off('click', handleClick);
     };
   }, [isRelocating, onChangeUserLocation]);
+
+  // Smoothly animate map when current user coordinates change
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    map.flyTo([currentUser.latitude, currentUser.longitude], map.getZoom() || 14, {
+      duration: 1.2,
+    });
+  }, [currentUser.latitude, currentUser.longitude]);
 
   // Update Markers and Radius
   useEffect(() => {
@@ -129,11 +160,11 @@ export function SocialMap({
       dashArray: '5, 8',
     }).addTo(map);
 
-    // 2. Add Current User Marker
+    // 2. Add Current User Marker (DRAGGABLE: Click and drag anywhere!)
     const currentUserIcon = L.divIcon({
       className: 'custom-user-marker',
       html: `
-        <div class="relative flex items-center justify-center -translate-x-1/2 -translate-y-1/2 cursor-pointer group">
+        <div class="relative flex items-center justify-center -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing group">
           ${
             isRadarSweeping
               ? `<div class="absolute w-24 h-24 rounded-full border-2 border-indigo-500/40 bg-indigo-500/10 animate-radar pointer-events-none"></div>`
@@ -141,11 +172,12 @@ export function SocialMap({
           }
           <div class="absolute w-12 h-12 rounded-full bg-indigo-600/30 animate-ping-subtle"></div>
           <div class="relative w-11 h-11 rounded-full p-0.5 bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 shadow-xl ring-2 ring-indigo-400">
-            <img src="${currentUser.avatar}" alt="${currentUser.name}" class="w-full h-full object-cover rounded-full" />
+            <img src="${currentUser.avatar}" alt="${currentUser.name}" class="w-full h-full object-cover rounded-full pointer-events-none" />
             <span class="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-slate-950 rounded-full"></span>
           </div>
-          <div class="absolute -top-7 px-2 py-0.5 bg-indigo-600 text-[10px] font-bold text-white rounded-full shadow-lg whitespace-nowrap">
-            YOU
+          <div class="absolute -top-7 px-2 py-0.5 bg-indigo-600 text-[10px] font-bold text-white rounded-full shadow-lg whitespace-nowrap flex items-center gap-1">
+            <span>YOU</span>
+            <span class="text-[9px] text-indigo-200 font-normal opacity-90">(Drag Me)</span>
           </div>
         </div>
       `,
@@ -156,7 +188,14 @@ export function SocialMap({
     const currentMarker = L.marker([currentUser.latitude, currentUser.longitude], {
       icon: currentUserIcon,
       zIndexOffset: 1000,
+      draggable: true,
     }).addTo(markersLayer);
+
+    currentMarker.on('dragend', (e) => {
+      const target = e.target as L.Marker;
+      const latlng = target.getLatLng();
+      onChangeUserLocation(Number(latlng.lat.toFixed(6)), Number(latlng.lng.toFixed(6)));
+    });
 
     currentMarker.bindPopup(`
       <div class="p-3 w-64 text-slate-100 bg-slate-900 rounded-xl">
@@ -296,6 +335,29 @@ export function SocialMap({
 
       {/* Floating Map Controls overlay */}
       <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
+        {/* Set Exact Location Modal */}
+        {onOpenLocationPicker && (
+          <button
+            onClick={onOpenLocationPicker}
+            className="p-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-rose-400 border border-slate-700/80 shadow-lg backdrop-blur-sm transition-all cursor-pointer group"
+            title="Set your exact city or area"
+          >
+            <MapPin className="w-5 h-5 group-hover:scale-110 transition-transform" />
+          </button>
+        )}
+
+        {/* Detect Real Location */}
+        {onDetectRealLocation && (
+          <button
+            onClick={onDetectRealLocation}
+            disabled={isDetectingLocation}
+            className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400 shadow-lg backdrop-blur-sm transition-all cursor-pointer group disabled:opacity-50"
+            title="Detect My Real Live Location (GPS & IP)"
+          >
+            <Navigation className={`w-5 h-5 text-white ${isDetectingLocation ? 'animate-spin' : 'group-hover:scale-110'} transition-transform`} />
+          </button>
+        )}
+
         {/* Center on Me */}
         <button
           onClick={handleCenterOnMe}

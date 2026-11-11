@@ -57,6 +57,7 @@ Make sure you have installed on your computer:
    ```bash
    npm install
    ```
+   *(If npm reports an `ERESOLVE` peer dependency conflict on Windows, run `npm install --legacy-peer-deps`)*
 
 2. Start the unified Node.js Express server + Vite frontend:
    ```bash

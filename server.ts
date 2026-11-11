@@ -18,17 +18,34 @@ app.use(express.json());
 // ============================================================================
 // PostgreSQL Database Connection & In-Memory Fallback
 // ============================================================================
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  host: process.env.PGHOST || 'localhost',
-  port: Number(process.env.PGPORT) || 5432,
-  user: process.env.PGUSER || 'postgres',
-  password: process.env.PGPASSWORD || 'postgres',
-  database: process.env.PGDATABASE || 'pulsenearby',
-  connectionTimeoutMillis: 3000,
-});
+const pgUser = process.env.PGUSER || 'postgres';
+const pgPassword = process.env.PGPASSWORD || 'postgres';
+const pgHost = process.env.PGHOST || 'localhost';
+const pgPort = Number(process.env.PGPORT) || 5432;
+const pgDatabase = process.env.PGDATABASE || 'pulsenearby';
 
+// Only use DATABASE_URL if specifically provided without overriding individual settings
+const hasCustomPgPassword = Boolean(process.env.PGPASSWORD);
+const isDefaultDatabaseUrl =
+  !process.env.DATABASE_URL ||
+  process.env.DATABASE_URL.includes(':postgres@') ||
+  process.env.DATABASE_URL.includes(':yourpassword@');
+
+const poolConfig =
+  process.env.DATABASE_URL && !hasCustomPgPassword && !isDefaultDatabaseUrl
+    ? { connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 4000 }
+    : {
+        host: pgHost,
+        port: pgPort,
+        user: pgUser,
+        password: pgPassword,
+        database: pgDatabase,
+        connectionTimeoutMillis: 4000,
+      };
+
+let pool = new Pool(poolConfig);
 let isPostgresConnected = false;
+let lastDbError: string | null = null;
 
 // In-memory fallback store if PostgreSQL is not active locally yet
 interface UserRecord {
@@ -142,11 +159,50 @@ async function initDatabase() {
     }
 
     client.release();
-  } catch (err) {
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    lastDbError = msg;
+
+    // Self-healing: If "pulsenearby" database does not exist, auto-create it using the default 'postgres' database!
+    if (msg.includes('does not exist') && msg.includes(pgDatabase)) {
+      console.log(`ℹ️ Database "${pgDatabase}" does not exist yet. Attempting to create it automatically...`);
+      try {
+        const rootPool = new Pool({
+          host: pgHost,
+          port: pgPort,
+          user: pgUser,
+          password: pgPassword,
+          database: 'postgres',
+          connectionTimeoutMillis: 4000,
+        });
+        const rootClient = await rootPool.connect();
+        await rootClient.query(`CREATE DATABASE "${pgDatabase}"`);
+        rootClient.release();
+        await rootPool.end();
+        console.log(`🎉 Database "${pgDatabase}" created automatically! Connecting...`);
+
+        // Reconnect pool to newly created database
+        pool = new Pool(poolConfig);
+        const retryClient = await pool.connect();
+        isPostgresConnected = true;
+        console.log(`✅ Connected to newly created PostgreSQL database "${pgDatabase}" successfully.`);
+        retryClient.release();
+        return;
+      } catch (autoErr: unknown) {
+        console.warn(`Could not auto-create database "${pgDatabase}": ${(autoErr as Error).message}`);
+      }
+    }
+
     isPostgresConnected = false;
-    console.warn(
-      '⚠️ PostgreSQL is not connected yet (using seamless in-memory fallback until local database is started).'
-    );
+    console.warn(`⚠️ PostgreSQL connection to ${pgHost}:${pgPort} as user "${pgUser}" failed: ${msg}`);
+
+    if (msg.includes('password authentication failed')) {
+      console.warn('🔑 Password authentication failed! Please open your .env file and set PGPASSWORD to your actual PostgreSQL password.');
+    } else if (msg.includes('ECONNREFUSED')) {
+      console.warn(`🔌 Connection refused on ${pgHost}:${pgPort}! PostgreSQL service is stopped. Open services.msc and start "postgresql-x64-XX", or run: Start-Service postgresql*`);
+    }
+
+    console.warn('ℹ️ Running on seamless in-memory fallback until your local PostgreSQL is started.');
   }
 }
 
@@ -161,9 +217,25 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     database: isPostgresConnected ? 'postgresql' : 'in-memory-fallback',
+    connected: isPostgresConnected,
+    dbHost: `${pgHost}:${pgPort}`,
+    dbUser: pgUser,
+    dbName: pgDatabase,
+    error: lastDbError,
     message: isPostgresConnected
-      ? 'Connected to local PostgreSQL database'
-      : 'Running with local fallback storage (PostgreSQL ready to connect)',
+      ? `Connected to local PostgreSQL database "${pgDatabase}"`
+      : `Using in-memory fallback (${lastDbError || 'not connected'})`,
+  });
+});
+
+app.get('/api/db-status', (req: Request, res: Response) => {
+  res.json({
+    connected: isPostgresConnected,
+    host: pgHost,
+    port: pgPort,
+    user: pgUser,
+    database: pgDatabase,
+    error: lastDbError,
   });
 });
 

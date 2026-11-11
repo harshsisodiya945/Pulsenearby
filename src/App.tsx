@@ -19,21 +19,18 @@ import { ConversationsList } from './components/Chat/ConversationsList.tsx';
 import { UserProfileModal } from './components/Profile/UserProfileModal.tsx';
 import { EditProfileModal } from './components/Profile/EditProfileModal.tsx';
 import { AddUserModal } from './components/Directory/AddUserModal.tsx';
+import { LocationPickerModal } from './components/Map/LocationPickerModal.tsx';
 import { LoginPage } from './components/Auth/LoginPage.tsx';
 import { sound } from './utils/audio.ts';
-import { Hand, X } from 'lucide-react';
+import { detectRealLocation, reverseGeocode, geocodeSearch } from './utils/geo.ts';
+import { Hand, X, Navigation } from 'lucide-react';
 
 export default function App() {
   // Authentic registered users
   const [registeredUsers, setRegisteredUsers] = useState<User[]>(() => getStoredUsers());
 
-  // Current session user (null = show Login page)
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = getSavedSession();
-    if (saved) return saved;
-    const stored = getStoredUsers();
-    return stored.length > 0 ? stored[0] : INITIAL_CURRENT_USER;
-  });
+  // Current session user (null by default so app asks for login every time)
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   // Authentic chat messages
   const [messages, setMessages] = useState<ChatMessage[]>(() => getStoredMessages());
@@ -50,6 +47,7 @@ export default function App() {
   const [isEditingProfile, setIsEditingProfile] = useState<boolean>(false);
   const [isAddingUser, setIsAddingUser] = useState<boolean>(false);
   const [isDetectingLocation, setIsDetectingLocation] = useState<boolean>(false);
+  const [isPickingLocation, setIsPickingLocation] = useState<boolean>(false);
   const [waveToast, setWaveToast] = useState<{ senderName: string; text: string } | null>(null);
 
   // Sync with Express backend on startup
@@ -80,6 +78,19 @@ export default function App() {
   useEffect(() => {
     saveSession(currentUser);
   }, [currentUser]);
+
+  // Attempt to auto-detect true location on startup if still on default New Delhi
+  useEffect(() => {
+    if (currentUser) {
+      const isDefaultDelhi =
+        Math.abs(currentUser.latitude - 28.6139) < 0.001 &&
+        Math.abs(currentUser.longitude - 77.209) < 0.001;
+
+      if (isDefaultDelhi) {
+        handleUseCurrentLocation(true);
+      }
+    }
+  }, []);
 
   // Dynamically compute distances from current user location to each real user
   const allUsers = useMemo(() => {
@@ -222,52 +233,97 @@ export default function App() {
     fetch(`/api/users/${id}`, { method: 'DELETE' }).catch(() => {});
   };
 
-  // Browser GPS detection handler
-  const handleUseCurrentLocation = () => {
-    if (!navigator.geolocation) {
-      alert('Geolocation is not supported by your browser.');
-      return;
-    }
-
+  // Real GPS & Network detection handler
+  const handleUseCurrentLocation = async (silent = false) => {
     setIsDetectingLocation(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = Number(pos.coords.latitude.toFixed(6));
-        const lng = Number(pos.coords.longitude.toFixed(6));
-        if (currentUser) {
-          const updated = {
-            ...currentUser,
-            latitude: lat,
-            longitude: lng,
-            neighborhood: 'My Location',
-            city: 'Local Area',
-          };
-          setCurrentUser(updated);
-          handleRegisterUser(updated);
+    try {
+      const loc = await detectRealLocation();
+      if (currentUser) {
+        const updated: User = {
+          ...currentUser,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          city: loc.city,
+          neighborhood: loc.neighborhood || loc.city,
+        };
+        setCurrentUser(updated);
+        handleRegisterUser(updated);
 
-          fetch(`/api/users/${currentUser.id}/location`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ latitude: lat, longitude: lng }),
-          }).catch(() => {});
-        }
-        setIsDetectingLocation(false);
-      },
-      () => {
-        setIsDetectingLocation(false);
+        fetch(`/api/users/${currentUser.id}/location`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            latitude: loc.latitude,
+            longitude: loc.longitude,
+            city: loc.city,
+            neighborhood: loc.neighborhood,
+          }),
+        }).catch(() => {});
+
         setWaveToast({
-          senderName: 'Location',
-          text: 'GPS permission blocked. You can click on the map or select a city hub.',
+          senderName: 'Location Detected',
+          text: `📍 Set to ${loc.city}${loc.country ? `, ${loc.country}` : ''} (${loc.source === 'gps' ? 'Live GPS' : 'Network IP'})`,
         });
-      },
-      { timeout: 8000 }
-    );
+      }
+    } catch {
+      if (!silent) {
+        setWaveToast({
+          senderName: 'Location Notice',
+          text: 'Could not access GPS. Please allow browser location or click anywhere on the map to set your pin.',
+        });
+      }
+    } finally {
+      setIsDetectingLocation(false);
+    }
+  };
+
+  // Jump to searched city/location
+  const handleLocationSearch = async (query: string) => {
+    if (!query.trim() || !currentUser) return;
+    setIsDetectingLocation(true);
+    try {
+      const result = await geocodeSearch(query);
+      if (result) {
+        const updated: User = {
+          ...currentUser,
+          latitude: result.latitude,
+          longitude: result.longitude,
+          city: result.city,
+          neighborhood: result.neighborhood || result.city,
+        };
+        setCurrentUser(updated);
+        handleRegisterUser(updated);
+
+        fetch(`/api/users/${currentUser.id}/location`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            latitude: result.latitude,
+            longitude: result.longitude,
+            city: result.city,
+            neighborhood: result.neighborhood,
+          }),
+        }).catch(() => {});
+
+        setWaveToast({
+          senderName: 'Location Updated',
+          text: `📍 Moved to ${result.city}`,
+        });
+      } else {
+        setWaveToast({
+          senderName: 'City Not Found',
+          text: `Could not find coordinates for "${query}". Try another city name.`,
+        });
+      }
+    } finally {
+      setIsDetectingLocation(false);
+    }
   };
 
   // Jump to pre-defined global city hub
   const handleSelectCityHub = (city: CityHub) => {
     if (!currentUser) return;
-    const updated = {
+    const updated: User = {
       ...currentUser,
       latitude: city.latitude,
       longitude: city.longitude,
@@ -283,16 +339,23 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ latitude: city.latitude, longitude: city.longitude, city: city.name }),
     }).catch(() => {});
+
+    setWaveToast({
+      senderName: 'City Hub',
+      text: `📍 Jumped to ${city.name}`,
+    });
   };
 
-  // Relocate current user manually on map
-  const handleChangeUserLocation = (lat: number, lng: number) => {
+  // Relocate current user manually on map click
+  const handleChangeUserLocation = async (lat: number, lng: number) => {
     if (!currentUser) return;
-    const updated = {
+    const geo = await reverseGeocode(lat, lng);
+    const updated: User = {
       ...currentUser,
       latitude: lat,
       longitude: lng,
-      neighborhood: 'Pinned Spot',
+      city: geo.city,
+      neighborhood: geo.neighborhood,
     };
     setCurrentUser(updated);
     handleRegisterUser(updated);
@@ -300,12 +363,17 @@ export default function App() {
     fetch(`/api/users/${currentUser.id}/location`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ latitude: lat, longitude: lng }),
+      body: JSON.stringify({
+        latitude: lat,
+        longitude: lng,
+        city: geo.city,
+        neighborhood: geo.neighborhood,
+      }),
     }).catch(() => {});
 
     setWaveToast({
       senderName: 'Location Updated',
-      text: `Your pin moved to (${lat.toFixed(4)}, ${lng.toFixed(4)}).`,
+      text: `📍 Pin set to ${geo.neighborhood}, ${geo.city}`,
     });
   };
 
@@ -428,6 +496,7 @@ export default function App() {
         onOpenChatWithUser={handleStartChat}
         onlineCount={onlineCount}
         totalNearbyCount={filteredUsers.length}
+        onOpenLocationPicker={() => setIsPickingLocation(true)}
       />
 
       {/* Search & Discovery Filter Bar */}
@@ -437,16 +506,47 @@ export default function App() {
           onSearchChange={setSearchQuery}
           locationQuery={locationQuery}
           onLocationChange={setLocationQuery}
+          onLocationSearch={handleLocationSearch}
           radiusKm={radiusKm}
           onRadiusChange={setRadiusKm}
           onlineOnly={onlineOnly}
           onOnlineOnlyChange={setOnlineOnly}
           onSelectCityHub={handleSelectCityHub}
-          onUseCurrentLocation={handleUseCurrentLocation}
+          onUseCurrentLocation={() => handleUseCurrentLocation(false)}
           isDetectingLocation={isDetectingLocation}
           totalFound={filteredUsers.length}
         />
       )}
+
+      {/* Real location helper banner if currently on default New Delhi */}
+      {currentUser &&
+        Math.abs(currentUser.latitude - 28.6139) < 0.001 &&
+        Math.abs(currentUser.longitude - 77.209) < 0.001 && (
+          <div className="bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 border-b border-indigo-500/30 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-indigo-200">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />
+              <span>
+                Default location (<strong>New Delhi</strong>) active. On laptops, ISPs often route traffic through Delhi.
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsPickingLocation(true)}
+                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors cursor-pointer shadow-sm"
+              >
+                Set My Real City
+              </button>
+              <button
+                onClick={() => handleUseCurrentLocation(false)}
+                disabled={isDetectingLocation}
+                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Navigation className={`w-3.5 h-3.5 ${isDetectingLocation ? 'animate-spin' : ''}`} />
+                <span>{isDetectingLocation ? 'Detecting...' : 'Try GPS'}</span>
+              </button>
+            </div>
+          </div>
+        )}
 
       {/* Main Viewport Content Area */}
       <main className="flex-1 relative overflow-hidden flex flex-col">
@@ -459,6 +559,9 @@ export default function App() {
             onStartChat={handleStartChat}
             onWaveUser={handleWaveUser}
             onChangeUserLocation={handleChangeUserLocation}
+            onDetectRealLocation={() => handleUseCurrentLocation(false)}
+            isDetectingLocation={isDetectingLocation}
+            onOpenLocationPicker={() => setIsPickingLocation(true)}
           />
         )}
 
@@ -522,6 +625,38 @@ export default function App() {
           currentUser={currentUser}
           onAddUser={handleAddUser}
           onClose={() => setIsAddingUser(false)}
+        />
+      )}
+
+      {/* Location Picker / City Selector Modal */}
+      {isPickingLocation && currentUser && (
+        <LocationPickerModal
+          currentUser={currentUser}
+          onClose={() => setIsPickingLocation(false)}
+          onUpdateLocation={(lat, lng, city, neighborhood) => {
+            const updated: User = {
+              ...currentUser,
+              latitude: lat,
+              longitude: lng,
+              city,
+              neighborhood,
+            };
+            setCurrentUser(updated);
+            handleRegisterUser(updated);
+
+            fetch(`/api/users/${currentUser.id}/location`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ latitude: lat, longitude: lng, city, neighborhood }),
+            }).catch(() => {});
+
+            setWaveToast({
+              senderName: 'Location Set',
+              text: `📍 Set to ${city}!`,
+            });
+          }}
+          onDetectGPS={() => handleUseCurrentLocation(false)}
+          isDetectingGPS={isDetectingLocation}
         />
       )}
 

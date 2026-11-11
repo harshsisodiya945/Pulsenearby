@@ -8,13 +8,9 @@
   font-family: inherit;
 }
 
-/* Custom dark tile filter for night mode map */
+/* Custom dark tile filter for night mode OpenStreetMap (100% keyless) */
 .dark-tiles .leaflet-tile-pane {
-  filter: brightness(0.65) invert(1) contrast(3) hue-rotate(200deg) saturate(0.35) brightness(0.7);
-}
-
-.carto-dark-tiles .leaflet-tile-pane {
-  filter: brightness(0.85) contrast(1.1);
+  filter: invert(100%) hue-rotate(180deg) brightness(88%) contrast(92%);
 }
 
 /* Custom pulsing radar ring animation */
