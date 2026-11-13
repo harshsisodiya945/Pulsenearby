@@ -24,7 +24,9 @@ export function LoginPage({
   const [password, setPassword] = useState('');
   const [city, setCity] = useState('New Delhi');
 
-  const handleLogin = (e: React.FormEvent) => {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -36,7 +38,39 @@ export function LoginPage({
       return;
     }
 
-    // Find user in registered users
+    setIsLoading(true);
+
+    try {
+      // 1. Authenticate with backend API
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password: cleanPassword }),
+      });
+
+      if (res.ok) {
+        const user = await res.json();
+        setIsLoading(false);
+        onLoginSuccess(user);
+        return;
+      }
+
+      if (res.status === 401) {
+        setIsLoading(false);
+        setError('Incorrect password. Please try again.');
+        return;
+      }
+
+      if (res.status === 404) {
+        setIsLoading(false);
+        setError(`No account found for "${identifier}". Please check or click "Create account".`);
+        return;
+      }
+    } catch {
+      // Backend offline: proceed to strict local storage verification
+    }
+
+    // 2. Strict Local Verification
     const matched = registeredUsers.find(
       (u) =>
         (u.email && u.email.toLowerCase() === identifier) ||
@@ -44,16 +78,22 @@ export function LoginPage({
     );
 
     if (!matched) {
+      setIsLoading(false);
       setError(`No account found for "${identifier}". Please check or click "Create account".`);
       return;
     }
 
-    if (matched.password && matched.password !== cleanPassword) {
+    // Strict password match (default Harsh Sisodiya password is 'password123')
+    const expectedPassword =
+      matched.password || (matched.username === 'harshsisodiya9425' ? 'password123' : null);
+
+    if (!expectedPassword || expectedPassword !== cleanPassword) {
+      setIsLoading(false);
       setError('Incorrect password. Please try again.');
       return;
     }
 
-    // Success login
+    setIsLoading(false);
     onLoginSuccess(matched);
   };
 
@@ -104,12 +144,11 @@ export function LoginPage({
     onLoginSuccess(newUser);
   };
 
-  // Quick sign in as default account
+  // Quick prefill Harsh Sisodiya credentials for easy testing
   const handleQuickSignIn = () => {
-    const defaultUser = registeredUsers[0];
-    if (defaultUser) {
-      onLoginSuccess(defaultUser);
-    }
+    setEmail('harshsisodiya9425@gmail.com');
+    setPassword('password123');
+    setError(null);
   };
 
   return (
@@ -221,9 +260,10 @@ export function LoginPage({
 
             <button
               type="submit"
-              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition-all cursor-pointer flex items-center justify-center gap-2 mt-2"
+              disabled={isLoading}
+              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition-all cursor-pointer flex items-center justify-center gap-2 mt-2"
             >
-              <span>Sign In</span>
+              <span>{isLoading ? 'Verifying...' : 'Sign In'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
 

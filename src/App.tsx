@@ -25,6 +25,26 @@ import { sound } from './utils/audio.ts';
 import { detectRealLocation, reverseGeocode, geocodeSearch } from './utils/geo.ts';
 import { Hand, X, Navigation } from 'lucide-react';
 
+// Normalizes message fields so camelCase senderId/receiverId are guaranteed
+function normalizeMessage(m: any): ChatMessage {
+  let ts = m.timestamp || m.created_at || '';
+  if (typeof ts === 'string' && ts.includes('T')) {
+    const d = new Date(ts);
+    if (!isNaN(d.getTime())) {
+      ts = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+  }
+  return {
+    id: String(m.id),
+    senderId: String(m.senderId || m.sender_id || ''),
+    receiverId: String(m.receiverId || m.receiver_id || ''),
+    text: String(m.text || m.content || ''),
+    timestamp: ts || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    isRead: Boolean(m.isRead ?? m.is_read),
+    type: m.type || m.message_type || 'text',
+  };
+}
+
 export default function App() {
   // Authentic registered users
   const [registeredUsers, setRegisteredUsers] = useState<User[]>(() => getStoredUsers());
@@ -32,8 +52,10 @@ export default function App() {
   // Current session user (null by default so app asks for login every time)
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-  // Authentic chat messages
-  const [messages, setMessages] = useState<ChatMessage[]>(() => getStoredMessages());
+  // Authentic chat messages with guaranteed normalization
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    return getStoredMessages().map(normalizeMessage);
+  });
 
   const [radiusKm, setRadiusKm] = useState<number>(25);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -50,7 +72,7 @@ export default function App() {
   const [isPickingLocation, setIsPickingLocation] = useState<boolean>(false);
   const [waveToast, setWaveToast] = useState<{ senderName: string; text: string } | null>(null);
 
-  // Sync with Express backend on startup
+  // Sync users & all messages with Express backend on startup
   useEffect(() => {
     fetch('/api/users')
       .then((res) => (res.ok ? res.json() : null))
@@ -60,9 +82,22 @@ export default function App() {
           saveStoredUsers(data);
         }
       })
-      .catch(() => {
-        // Fallback to local storage if API is offline
-      });
+      .catch(() => {});
+
+    fetch('/api/messages')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          const normalized = data.map(normalizeMessage);
+          setMessages((prev) => {
+            const map = new Map<string, ChatMessage>();
+            prev.forEach((m) => map.set(m.id, m));
+            normalized.forEach((m) => map.set(m.id, m));
+            return Array.from(map.values());
+          });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Synchronize users and messages to storage
@@ -171,11 +206,16 @@ export default function App() {
       }
     });
 
-    return list.sort(
-      (a, b) =>
-        new Date(`1970/01/01 ${b.lastMessage.timestamp}`).getTime() -
-        new Date(`1970/01/01 ${a.lastMessage.timestamp}`).getTime()
-    );
+    return list.sort((a, b) => {
+      const parseTime = (ts: string) => {
+        const d = new Date(ts);
+        if (!isNaN(d.getTime())) return d.getTime();
+        const d2 = new Date(`1970/01/01 ${ts}`);
+        if (!isNaN(d2.getTime())) return d2.getTime();
+        return 0;
+      };
+      return parseTime(b.lastMessage.timestamp) - parseTime(a.lastMessage.timestamp);
+    });
   }, [messages, currentUser, allUsers]);
 
   // Online count in current area
@@ -447,6 +487,7 @@ export default function App() {
         .then((res) => (res.ok ? res.json() : null))
         .then((thread) => {
           if (Array.isArray(thread) && thread.length > 0) {
+            const normalizedThread = thread.map(normalizeMessage);
             setMessages((prev) => {
               const other = prev.filter(
                 (m) =>
@@ -455,7 +496,7 @@ export default function App() {
                     (m.senderId === user.id && m.receiverId === currentUser.id)
                   )
               );
-              return [...other, ...thread];
+              return [...other, ...normalizedThread];
             });
           }
         })

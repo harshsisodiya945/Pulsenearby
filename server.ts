@@ -468,13 +468,53 @@ app.delete('/api/users/:id', async (req: Request, res: Response) => {
   }
 });
 
-// 8. Fetch Messages Thread
+// 8. Fetch All Messages
+app.get('/api/messages', async (req: Request, res: Response) => {
+  try {
+    if (isPostgresConnected) {
+      const result = await pool.query(
+        `SELECT id, 
+                sender_id AS "senderId", 
+                receiver_id AS "receiverId", 
+                content AS text, 
+                message_type AS type, 
+                is_read AS "isRead", 
+                TO_CHAR(created_at, 'HH12:MI AM') AS timestamp
+         FROM messages 
+         ORDER BY created_at ASC`
+      );
+      return res.json(result.rows);
+    } else {
+      return res.json(
+        memoryMessages.map((m) => ({
+          id: m.id,
+          senderId: m.sender_id,
+          receiverId: m.receiver_id,
+          text: m.content,
+          type: m.message_type,
+          isRead: m.is_read,
+          timestamp: m.created_at,
+        }))
+      );
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 9. Fetch Messages Thread between 2 users
 app.get('/api/messages/:userA/:userB', async (req: Request, res: Response) => {
   try {
     const { userA, userB } = req.params;
     if (isPostgresConnected) {
       const result = await pool.query(
-        `SELECT id, sender_id, receiver_id, content AS text, message_type AS type, is_read, created_at AS timestamp
+        `SELECT id, 
+                sender_id AS "senderId", 
+                receiver_id AS "receiverId", 
+                content AS text, 
+                message_type AS type, 
+                is_read AS "isRead", 
+                TO_CHAR(created_at, 'HH12:MI AM') AS timestamp
          FROM messages 
          WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)
          ORDER BY created_at ASC`,
@@ -504,7 +544,7 @@ app.get('/api/messages/:userA/:userB', async (req: Request, res: Response) => {
   }
 });
 
-// 9. Send Message
+// 10. Send Message
 app.post('/api/messages', async (req: Request, res: Response) => {
   try {
     const { senderId, receiverId, text, type } = req.body;
@@ -513,8 +553,8 @@ app.post('/api/messages', async (req: Request, res: Response) => {
 
     if (isPostgresConnected) {
       await pool.query(
-        `INSERT INTO messages (id, sender_id, receiver_id, content, message_type, is_read)
-         VALUES ($1, $2, $3, $4, $5, false)`,
+        `INSERT INTO messages (id, sender_id, receiver_id, content, message_type, is_read, created_at)
+         VALUES ($1, $2, $3, $4, $5, false, NOW())`,
         [id, senderId, receiverId, text, type || 'text']
       );
     } else {
