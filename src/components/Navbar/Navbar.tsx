@@ -56,7 +56,14 @@ export function Navbar({
             <div className="text-[11px] text-slate-400 flex items-center gap-1.5 flex-wrap">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
               <span>
-                <strong className="text-emerald-400 font-semibold">{onlineCount}</strong> online near
+                {onlineCount > 0 ? (
+                  <>
+                    <strong className="text-emerald-400 font-semibold">{onlineCount}</strong>
+                    <span> {onlineCount === 1 ? 'other online near' : 'others online near'}</span>
+                  </>
+                ) : (
+                  <span className="text-slate-400 font-medium">0 others online near</span>
+                )}
               </span>
               <button
                 type="button"

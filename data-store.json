@@ -1,0 +1,21 @@
+{
+  "users": [
+    {
+      "id": "user_harsh_original",
+      "username": "harshsisodiya9425",
+      "name": "Harsh Sisodiya",
+      "email": "harshsisodiya9425@gmail.com",
+      "password": "password123",
+      "avatar": "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=300&q=80",
+      "bio": "Fullstack developer exploring social platforms with live location & chat.",
+      "latitude": 28.6139,
+      "longitude": 77.209,
+      "city": "New Delhi",
+      "neighborhood": "Central",
+      "is_online": true,
+      "status_message": "Online on PulseNearby",
+      "last_active": "Active now"
+    }
+  ],
+  "messages": []
+}

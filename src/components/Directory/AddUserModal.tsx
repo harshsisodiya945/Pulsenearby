@@ -42,7 +42,7 @@ export function AddUserModal({ currentUser, onAddUser, onClose }: AddUserModalPr
     const cleanUsername = username.trim().toLowerCase().replace(/^@/, '').replace(/\s+/g, '_');
 
     const newUser: User = {
-      id: `user_${Date.now()}_${cleanUsername}`,
+      id: `user_${cleanUsername}`,
       name: name.trim(),
       username: cleanUsername,
       email: email.trim().toLowerCase() || `${cleanUsername}@example.com`,

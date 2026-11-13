@@ -1,13 +1,11 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { User, ChatMessage, Conversation, CityHub } from './types/index.ts';
 import {
-  INITIAL_CURRENT_USER,
   getStoredUsers,
   saveStoredUsers,
   getStoredMessages,
   saveStoredMessages,
   calculateUserDistances,
-  getSavedSession,
   saveSession,
 } from './data/mockUsers.ts';
 import { Navbar, ActiveTab } from './components/Navbar/Navbar.tsx';
@@ -23,7 +21,15 @@ import { LocationPickerModal } from './components/Map/LocationPickerModal.tsx';
 import { LoginPage } from './components/Auth/LoginPage.tsx';
 import { sound } from './utils/audio.ts';
 import { detectRealLocation, reverseGeocode, geocodeSearch } from './utils/geo.ts';
+import { isUserMatch } from './utils/userMatcher.ts';
 import { Hand, X, Navigation } from 'lucide-react';
+
+function extractId(val: any): string {
+  if (!val) return '';
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'object') return String(val.id || val.username || '').trim();
+  return String(val).trim();
+}
 
 // Normalizes message fields so camelCase senderId/receiverId are guaranteed
 function normalizeMessage(m: any): ChatMessage {
@@ -35,9 +41,9 @@ function normalizeMessage(m: any): ChatMessage {
     }
   }
   return {
-    id: String(m.id),
-    senderId: String(m.senderId || m.sender_id || ''),
-    receiverId: String(m.receiverId || m.receiver_id || ''),
+    id: String(m.id || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`),
+    senderId: extractId(m.senderId || m.sender_id),
+    receiverId: extractId(m.receiverId || m.receiver_id),
     text: String(m.text || m.content || ''),
     timestamp: ts || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     isRead: Boolean(m.isRead ?? m.is_read),
@@ -71,6 +77,14 @@ export default function App() {
   const [isDetectingLocation, setIsDetectingLocation] = useState<boolean>(false);
   const [isPickingLocation, setIsPickingLocation] = useState<boolean>(false);
   const [waveToast, setWaveToast] = useState<{ senderName: string; text: string } | null>(null);
+  const autoDetectedForUserRef = useRef<string | null>(null);
+
+  // Auto-dismiss notification toast after 4.5s
+  useEffect(() => {
+    if (!waveToast) return;
+    const timer = setTimeout(() => setWaveToast(null), 4500);
+    return () => clearTimeout(timer);
+  }, [waveToast]);
 
   // Sync users & all messages with Express backend on startup
   useEffect(() => {
@@ -114,18 +128,59 @@ export default function App() {
     saveSession(currentUser);
   }, [currentUser]);
 
-  // Attempt to auto-detect true location on startup if still on default New Delhi
+  // Re-sync users and messages whenever currentUser logs in or switches profile, plus periodic live updates
   useEffect(() => {
-    if (currentUser) {
-      const isDefaultDelhi =
-        Math.abs(currentUser.latitude - 28.6139) < 0.001 &&
-        Math.abs(currentUser.longitude - 77.209) < 0.001;
+    if (!currentUser) return;
 
-      if (isDefaultDelhi) {
-        handleUseCurrentLocation(true);
-      }
+    const syncData = () => {
+      fetch('/api/users')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setRegisteredUsers(data);
+            saveStoredUsers(data);
+          }
+        })
+        .catch(() => {});
+
+      fetch('/api/messages')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) {
+            const normalized = data.map(normalizeMessage);
+            setMessages((prev) => {
+              const map = new Map<string, ChatMessage>();
+              prev.forEach((m) => map.set(m.id, m));
+              normalized.forEach((m) => map.set(m.id, m));
+              return Array.from(map.values());
+            });
+          }
+        })
+        .catch(() => {});
+    };
+
+    syncData();
+    const interval = setInterval(syncData, 4000);
+    return () => clearInterval(interval);
+  }, [currentUser?.id]);
+
+  // Attempt to auto-detect true location once per login session if still on default New Delhi
+  useEffect(() => {
+    if (!currentUser) {
+      autoDetectedForUserRef.current = null;
+      return;
     }
-  }, []);
+    if (autoDetectedForUserRef.current === currentUser.id) return;
+    autoDetectedForUserRef.current = currentUser.id;
+
+    const isDefaultDelhi =
+      Math.abs(currentUser.latitude - 28.6139) < 0.001 &&
+      Math.abs(currentUser.longitude - 77.209) < 0.001;
+
+    if (isDefaultDelhi) {
+      handleUseCurrentLocation(true);
+    }
+  }, [currentUser?.id]);
 
   // Dynamically compute distances from current user location to each real user
   const allUsers = useMemo(() => {
@@ -139,7 +194,7 @@ export default function App() {
     return allUsers
       .filter((user) => {
         // Exclude current user from nearby list
-        if (user.id === currentUser.id) return false;
+        if (isUserMatch(currentUser, user)) return false;
 
         // Radius filter
         if (user.distanceKm !== undefined && user.distanceKm > radiusKm) {
@@ -176,17 +231,32 @@ export default function App() {
   // Compute conversations list
   const conversations: Conversation[] = useMemo(() => {
     if (!currentUser) return [];
-    const map = new Map<string, { lastMessage: ChatMessage; unreadCount: number }>();
+    const map = new Map<string, { lastMessage: ChatMessage; unreadCount: number; partner: User }>();
 
     messages.forEach((m) => {
-      const partnerId = m.senderId === currentUser.id ? m.receiverId : m.senderId;
-      const current = map.get(partnerId);
-      const isUnread = !m.isRead && m.receiverId === currentUser.id;
+      const isFromMe = isUserMatch(currentUser, m.senderId);
+      const isToMe = isUserMatch(currentUser, m.receiverId);
+
+      // Only include messages involving currentUser
+      if (!isFromMe && !isToMe) return;
+
+      const partnerIdentifier = isFromMe ? m.receiverId : m.senderId;
+      if (!partnerIdentifier || isUserMatch(currentUser, partnerIdentifier)) return;
+
+      const partner =
+        allUsers.find((u) => isUserMatch(u, partnerIdentifier)) ||
+        registeredUsers.find((u) => isUserMatch(u, partnerIdentifier));
+
+      if (!partner || isUserMatch(currentUser, partner)) return;
+
+      const isUnread = !m.isRead && isToMe;
+      const current = map.get(partner.id);
 
       if (!current) {
-        map.set(partnerId, {
+        map.set(partner.id, {
           lastMessage: m,
           unreadCount: isUnread ? 1 : 0,
+          partner,
         });
       } else {
         current.lastMessage = m;
@@ -195,15 +265,12 @@ export default function App() {
     });
 
     const list: Conversation[] = [];
-    map.forEach((value, partnerId) => {
-      const partner = allUsers.find((u) => u.id === partnerId);
-      if (partner) {
-        list.push({
-          user: partner,
-          lastMessage: value.lastMessage,
-          unreadCount: value.unreadCount,
-        });
-      }
+    map.forEach((value) => {
+      list.push({
+        user: value.partner,
+        lastMessage: value.lastMessage,
+        unreadCount: value.unreadCount,
+      });
     });
 
     return list.sort((a, b) => {
@@ -216,12 +283,15 @@ export default function App() {
       };
       return parseTime(b.lastMessage.timestamp) - parseTime(a.lastMessage.timestamp);
     });
-  }, [messages, currentUser, allUsers]);
+  }, [messages, currentUser, allUsers, registeredUsers]);
 
-  // Online count in current area
+  // Online count in current area (strictly counts other users nearby)
   const onlineCount = useMemo(() => {
-    return allUsers.filter((u) => u.isOnline && (u.distanceKm ?? 999) <= radiusKm).length;
-  }, [allUsers, radiusKm]);
+    if (!currentUser) return 0;
+    return allUsers.filter(
+      (u) => !isUserMatch(currentUser, u) && u.isOnline && (u.distanceKm ?? 999) <= radiusKm
+    ).length;
+  }, [allUsers, currentUser, radiusKm]);
 
   // Auth Handlers
   const handleLoginSuccess = (user: User) => {
@@ -234,14 +304,11 @@ export default function App() {
   };
 
   const handleRegisterUser = (newUser: User) => {
-    setRegisteredUsers((prev) => [newUser, ...prev.filter((u) => u.id !== newUser.id)]);
+    setRegisteredUsers((prev) => [newUser, ...prev.filter((u) => !isUserMatch(u, newUser))]);
+  };
 
-    // Call Express backend
-    fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newUser),
-    }).catch(() => {});
+  const updateLocalUser = (updated: User) => {
+    setRegisteredUsers((prev) => [updated, ...prev.filter((u) => !isUserMatch(u, updated))]);
   };
 
   const handleLogout = () => {
@@ -287,7 +354,7 @@ export default function App() {
           neighborhood: loc.neighborhood || loc.city,
         };
         setCurrentUser(updated);
-        handleRegisterUser(updated);
+        updateLocalUser(updated);
 
         fetch(`/api/users/${currentUser.id}/location`, {
           method: 'PUT',
@@ -332,7 +399,7 @@ export default function App() {
           neighborhood: result.neighborhood || result.city,
         };
         setCurrentUser(updated);
-        handleRegisterUser(updated);
+        updateLocalUser(updated);
 
         fetch(`/api/users/${currentUser.id}/location`, {
           method: 'PUT',
@@ -371,7 +438,7 @@ export default function App() {
       neighborhood: 'Central',
     };
     setCurrentUser(updated);
-    handleRegisterUser(updated);
+    updateLocalUser(updated);
     setLocationQuery('');
 
     fetch(`/api/users/${currentUser.id}/location`, {
@@ -398,7 +465,7 @@ export default function App() {
       neighborhood: geo.neighborhood,
     };
     setCurrentUser(updated);
-    handleRegisterUser(updated);
+    updateLocalUser(updated);
 
     fetch(`/api/users/${currentUser.id}/location`, {
       method: 'PUT',
@@ -443,6 +510,7 @@ export default function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        id: newMsg.id,
         senderId: currentUser.id,
         receiverId,
         text,
@@ -471,32 +539,46 @@ export default function App() {
   };
 
   // Start chat with user
-  const handleStartChat = (user: User) => {
+  const handleStartChat = (user: User | null) => {
     setSelectedUserForProfile(null);
     setSelectedUserForChat(user);
 
-    if (currentUser) {
+    if (user && currentUser) {
+      // Mark matching messages as read locally
       setMessages((prev) =>
-        prev.map((m) =>
-          m.senderId === user.id && m.receiverId === currentUser.id ? { ...m, isRead: true } : m
-        )
+        prev.map((m) => {
+          const isFromPartner = isUserMatch(user, m.senderId);
+          const isToMe = isUserMatch(currentUser, m.receiverId);
+          if (isFromPartner && isToMe) {
+            return { ...m, isRead: true };
+          }
+          return m;
+        })
       );
 
-      // Fetch thread from backend
+      // Persist read status on backend
+      fetch('/api/messages/mark-read', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          receiverId: currentUser.id,
+          senderId: user.id,
+          receiverUsername: currentUser.username,
+          senderUsername: user.username,
+        }),
+      }).catch(() => {});
+
+      // Fetch thread from backend and merge seamlessly
       fetch(`/api/messages/${currentUser.id}/${user.id}`)
         .then((res) => (res.ok ? res.json() : null))
         .then((thread) => {
           if (Array.isArray(thread) && thread.length > 0) {
             const normalizedThread = thread.map(normalizeMessage);
             setMessages((prev) => {
-              const other = prev.filter(
-                (m) =>
-                  !(
-                    (m.senderId === currentUser.id && m.receiverId === user.id) ||
-                    (m.senderId === user.id && m.receiverId === currentUser.id)
-                  )
-              );
-              return [...other, ...normalizedThread];
+              const map = new Map<string, ChatMessage>();
+              prev.forEach((m) => map.set(m.id, m));
+              normalizedThread.forEach((m) => map.set(m.id, m));
+              return Array.from(map.values());
             });
           }
         })
@@ -509,7 +591,25 @@ export default function App() {
     if (!currentUser) return;
     const next = { ...currentUser, ...updated };
     setCurrentUser(next);
-    handleRegisterUser(next);
+    updateLocalUser(next);
+
+    fetch(`/api/users/${currentUser.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: next.name,
+        username: next.username,
+        bio: next.bio,
+        statusMessage: next.statusMessage,
+        avatar: next.avatar,
+        isOnline: next.isOnline,
+      }),
+    }).catch(() => {});
+
+    setWaveToast({
+      senderName: 'Profile Saved',
+      text: 'Your profile updates are live.',
+    });
   };
 
   // If not authenticated, render Login Page with Real Name, Username, Email, and Password
@@ -624,14 +724,19 @@ export default function App() {
           <ConversationsList
             conversations={conversations}
             allUsers={allUsers}
-            onOpenChat={handleStartChat}
+            currentUser={currentUser}
+            messages={messages}
+            selectedPartner={selectedUserForChat}
+            onSelectPartner={handleStartChat}
+            onSendMessage={handleSendMessage}
+            onWaveUser={handleWaveUser}
             onExploreMap={() => setActiveTab('map')}
           />
         )}
       </main>
 
-      {/* Slide-over Live Chat Drawer */}
-      {selectedUserForChat && (
+      {/* Slide-over Live Chat Drawer when on map or directory tab */}
+      {activeTab !== 'chats' && selectedUserForChat && (
         <ChatDrawer
           partner={selectedUserForChat}
           currentUser={currentUser}
@@ -683,7 +788,7 @@ export default function App() {
               neighborhood,
             };
             setCurrentUser(updated);
-            handleRegisterUser(updated);
+            updateLocalUser(updated);
 
             fetch(`/api/users/${currentUser.id}/location`, {
               method: 'PUT',

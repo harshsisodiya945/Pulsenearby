@@ -18,6 +18,15 @@ interface SocialMapProps {
 
 type MapTheme = 'dark' | 'light' | 'streets';
 
+function escapeHtml(str: string): string {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function SocialMap({
   currentUser,
   users,
@@ -200,16 +209,16 @@ export function SocialMap({
     currentMarker.bindPopup(`
       <div class="p-3 w-64 text-slate-100 bg-slate-900 rounded-xl">
         <div class="flex items-center gap-2 mb-2">
-          <img src="${currentUser.avatar}" class="w-9 h-9 rounded-full object-cover ring-2 ring-indigo-500" />
+          <img src="${escapeHtml(currentUser.avatar)}" class="w-9 h-9 rounded-full object-cover ring-2 ring-indigo-500" />
           <div>
-            <div class="font-bold text-sm text-white">${currentUser.name} (You)</div>
-            <div class="text-[11px] text-indigo-400">@${currentUser.username}</div>
+            <div class="font-bold text-sm text-white">${escapeHtml(currentUser.name)} (You)</div>
+            <div class="text-[11px] text-indigo-400">@${escapeHtml(currentUser.username)}</div>
           </div>
         </div>
-        <p class="text-xs text-slate-300 italic mb-2">"${currentUser.statusMessage}"</p>
+        <p class="text-xs text-slate-300 italic mb-2">"${escapeHtml(currentUser.statusMessage)}"</p>
         <div class="text-[11px] text-slate-400 flex items-center gap-1">
           <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-          <span>Broadcasting location in ${currentUser.neighborhood || currentUser.city}</span>
+          <span>Broadcasting location in ${escapeHtml(currentUser.neighborhood || currentUser.city)}</span>
         </div>
       </div>
     `);
@@ -227,12 +236,12 @@ export function SocialMap({
               ? 'bg-gradient-to-tr from-emerald-500 to-teal-400 ring-2 ring-emerald-400/80 shadow-emerald-500/20'
               : 'bg-slate-700 ring-1 ring-slate-600'
           } shadow-lg">
-            <img src="${user.avatar}" alt="${user.name}" class="w-full h-full object-cover rounded-full" />
+            <img src="${escapeHtml(user.avatar)}" alt="${escapeHtml(user.name)}" class="w-full h-full object-cover rounded-full" />
             <span class="absolute bottom-0 right-0 w-3 h-3 ${isOnline ? 'bg-emerald-500' : 'bg-slate-500'} border-2 border-slate-900 rounded-full"></span>
           </div>
           <div class="absolute -top-7 px-2 py-0.5 bg-slate-900/90 border border-slate-700/80 text-[10px] font-medium text-slate-200 rounded-md shadow-md whitespace-nowrap flex items-center gap-1 group-hover:bg-indigo-950 group-hover:border-indigo-500">
-            <span>${user.name.split(' ')[0]}</span>
-            ${distStr ? `<span class="text-indigo-400 font-semibold">• ${distStr}</span>` : ''}
+            <span>${escapeHtml(user.name.split(' ')[0])}</span>
+            ${distStr ? `<span class="text-indigo-400 font-semibold">• ${escapeHtml(distStr)}</span>` : ''}
           </div>
         </div>
       `;
@@ -252,27 +261,27 @@ export function SocialMap({
       const popupDiv = document.createElement('div');
       popupDiv.className = 'p-3 w-64 text-slate-100 bg-slate-900 rounded-xl space-y-2.5';
       popupDiv.innerHTML = `
-        <div class="flex items-center gap-2.5 cursor-pointer" id="popup-profile-${user.id}">
-          <img src="${user.avatar}" class="w-10 h-10 rounded-full object-cover ring-2 ${isOnline ? 'ring-emerald-500' : 'ring-slate-600'}" />
+        <div class="flex items-center gap-2.5 cursor-pointer" id="popup-profile-${escapeHtml(user.id)}">
+          <img src="${escapeHtml(user.avatar)}" class="w-10 h-10 rounded-full object-cover ring-2 ${isOnline ? 'ring-emerald-500' : 'ring-slate-600'}" />
           <div class="flex-1 min-w-0">
             <div class="font-bold text-sm text-white truncate flex items-center gap-1">
-              <span>${user.name}</span>
+              <span>${escapeHtml(user.name)}</span>
               ${user.isFriend ? '<span class="text-xs text-amber-400" title="Connected">★</span>' : ''}
             </div>
             <div class="text-[11px] text-slate-400 flex items-center gap-1">
-              <span>@${user.username}</span>
+              <span>@${escapeHtml(user.username)}</span>
               <span>•</span>
-              <span class="text-indigo-400 font-semibold">${distStr || 'Near you'}</span>
+              <span class="text-indigo-400 font-semibold">${escapeHtml(distStr || 'Near you')}</span>
             </div>
           </div>
         </div>
-        <p class="text-xs text-slate-300 italic line-clamp-2">"${user.statusMessage || user.bio}"</p>
+        <p class="text-xs text-slate-300 italic line-clamp-2">"${escapeHtml(user.statusMessage || user.bio)}"</p>
         <div class="pt-2 border-t border-slate-800 flex items-center gap-2">
-          <button id="btn-chat-${user.id}" class="flex-1 py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer">
+          <button id="btn-chat-${escapeHtml(user.id)}" class="flex-1 py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer">
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
             Chat Live
           </button>
-          <button id="btn-wave-${user.id}" class="py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer" title="Send a Wave">
+          <button id="btn-wave-${escapeHtml(user.id)}" class="py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer" title="Send a Wave">
             👋 Wave
           </button>
         </div>

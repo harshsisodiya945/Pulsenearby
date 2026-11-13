@@ -51,7 +51,13 @@ export function LoginPage({
       if (res.ok) {
         const user = await res.json();
         setIsLoading(false);
-        onLoginSuccess(user);
+        const normalized: User = {
+          ...user,
+          isOnline: Boolean(user.isOnline ?? user.is_online ?? true),
+          statusMessage: user.statusMessage || user.status_message || 'Available on PulseNearby',
+          lastActive: user.lastActive || user.last_active || 'Active now',
+        };
+        onLoginSuccess(normalized);
         return;
       }
 
@@ -97,7 +103,7 @@ export function LoginPage({
     onLoginSuccess(matched);
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -111,7 +117,7 @@ export function LoginPage({
       return;
     }
 
-    // Check if username or email already taken
+    // Check if username or email already taken locally
     const existing = registeredUsers.find(
       (u) =>
         u.username.toLowerCase() === cleanUsername ||
@@ -123,8 +129,9 @@ export function LoginPage({
       return;
     }
 
+    const canonicalId = `user_${cleanUsername}`;
     const newUser: User = {
-      id: `user_${Date.now()}_${cleanUsername}`,
+      id: canonicalId,
       name: cleanName,
       username: cleanUsername,
       email: cleanEmail,
@@ -140,6 +147,40 @@ export function LoginPage({
       statusMessage: 'Available on PulseNearby',
     };
 
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newUser),
+      });
+
+      if (res.status === 409) {
+        const data = await res.json().catch(() => ({}));
+        setIsLoading(false);
+        setError(data.error || 'Username or email is already registered. Please sign in instead.');
+        return;
+      }
+
+      if (res.ok) {
+        const created = await res.json();
+        const normalized: User = {
+          ...newUser,
+          ...created,
+          isOnline: Boolean(created.isOnline ?? true),
+          statusMessage: created.statusMessage || newUser.statusMessage,
+          lastActive: created.lastActive || 'Active now',
+        };
+        setIsLoading(false);
+        onRegisterUser(normalized);
+        onLoginSuccess(normalized);
+        return;
+      }
+    } catch {
+      // Backend unreachable: fall back to local registration
+    }
+
+    setIsLoading(false);
     onRegisterUser(newUser);
     onLoginSuccess(newUser);
   };

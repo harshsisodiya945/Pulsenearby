@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { User, ChatMessage } from '../../types/index.ts';
 import { Send, X, Hand, MapPin, CheckCheck, Smile, Sparkles } from 'lucide-react';
 import { sound } from '../../utils/audio.ts';
+import { isUserMatch } from '../../utils/userMatcher.ts';
 
 interface ChatDrawerProps {
   partner: User;
@@ -23,12 +24,14 @@ export function ChatDrawer({
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Filter messages between current user and partner
-  const thread = messages.filter(
-    (m) =>
-      (m.senderId === currentUser.id && m.receiverId === partner.id) ||
-      (m.senderId === partner.id && m.receiverId === currentUser.id)
-  );
+  // Filter messages between current user and partner using robust user matching
+  const thread = messages.filter((m) => {
+    const isFromMeToPartner =
+      isUserMatch(currentUser, m.senderId) && isUserMatch(partner, m.receiverId);
+    const isFromPartnerToMe =
+      isUserMatch(partner, m.senderId) && isUserMatch(currentUser, m.receiverId);
+    return isFromMeToPartner || isFromPartnerToMe;
+  });
 
   // Auto-scroll to bottom of conversation
   useEffect(() => {
@@ -158,7 +161,7 @@ export function ChatDrawer({
           </div>
         ) : (
           thread.map((msg) => {
-            const isMe = msg.senderId === currentUser.id;
+            const isMe = isUserMatch(currentUser, msg.senderId);
             return (
               <div
                 key={msg.id}
